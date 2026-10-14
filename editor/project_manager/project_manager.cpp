@@ -1338,7 +1338,6 @@ ProjectManager::ProjectManager() {
 		if (!EditorSettings::get_singleton()) {
 			EditorSettings::create();
 		}
-		EditorSettings::get_singleton()->set_optimize_save(false); // Just write settings as they come.
 
 		{
 			bool agile_input_event_flushing = EDITOR_GET("input/buffering/agile_event_flushing");

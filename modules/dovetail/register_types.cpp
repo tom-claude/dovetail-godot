@@ -48,6 +48,7 @@ class DovetailAppBridge : public Object {
 	String token;
 	String info_path;
 	Dictionary info;
+	uint64_t next_settings_check_msec = 0;
 
 	static Dictionary ok(const Variant &p_id, const Dictionary &p_result) {
 		Dictionary d;
@@ -207,6 +208,7 @@ class DovetailAppBridge : public Object {
 		if (!es) {
 			return fail(p_id, "not_ready", "Editor settings are not loaded");
 		}
+		es->reload_if_changed_on_disk(); // Answer with what the file holds now.
 		String name = p_args.get("name", String());
 		if (name.is_empty()) {
 			return fail(p_id, "bad_args", "name is required", "e.g. run/window_placement/rect");
@@ -233,6 +235,8 @@ class DovetailAppBridge : public Object {
 		if (p_args.has("value")) {
 			Variant value = from_json(p_args["value"], current.get_type());
 			if (value != current) {
+				// set_setting marks it changed in this window, so the save below merges: other
+				// settings changed on disk meanwhile are kept, this one is written.
 				es->set_setting(name, value);
 				// Same order as the Editor Settings dialog: tell the editor, then write the file.
 				es->notify_changes();
@@ -279,6 +283,14 @@ class DovetailAppBridge : public Object {
 	}
 
 	void poll() {
+		// Editor settings changed on disk (an agent, another window) are taken within a second.
+		const uint64_t now = OS::get_singleton()->get_ticks_msec();
+		if (now >= next_settings_check_msec) {
+			next_settings_check_msec = now + 1000;
+			if (EditorSettings::get_singleton()) {
+				EditorSettings::get_singleton()->reload_if_changed_on_disk();
+			}
+		}
 		if (server.is_null() || !server->is_listening()) {
 			return;
 		}

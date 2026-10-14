@@ -259,7 +259,7 @@ static bool init_display_scale_found = false;
 static int init_display_scale = 0;
 static bool init_custom_scale_found = false;
 static float init_custom_scale = 1.0;
-static bool init_expand_to_title = false;
+static bool init_expand_to_title = true; // The editor setting's default; the settings file stores only non-defaults.
 static bool init_expand_to_title_found = false;
 #endif
 static bool use_custom_res = true;

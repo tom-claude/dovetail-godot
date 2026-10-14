@@ -90,6 +90,7 @@ private:
 	static Ref<EditorSettings> singleton;
 
 	HashSet<String> changed_settings;
+	String disk_md5; // Of the settings file as last read or written; see reload_if_changed_on_disk().
 	mutable String auto_language;
 
 	mutable Ref<ConfigFile> project_metadata;
@@ -120,6 +121,8 @@ private:
 	bool _property_get_revert(const StringName &p_name, Variant &r_property) const;
 
 	void _set_initialized();
+	bool _merge_from_disk(bool p_notify);
+	static void _save(bool p_notify);
 	void _load_defaults(Ref<ConfigFile> p_extra_config = Ref<ConfigFile>());
 	void _load_default_visual_shader_editor_theme();
 	static String _guess_exec_args_for_extenal_editor(const String &p_value);
@@ -151,6 +154,7 @@ public:
 	void setup_network();
 	static void save();
 	static void destroy();
+	bool reload_if_changed_on_disk();
 	void set_optimize_save(bool p_optimize);
 
 	bool has_default_value(const String &p_setting) const;

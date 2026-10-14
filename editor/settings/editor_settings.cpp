@@ -47,6 +47,7 @@
 #include "core/os/os.h"
 #include "core/string/translation_server.h"
 #include "core/templates/rb_set.h"
+#include "core/variant/variant_parser.h"
 #include "core/version.h"
 #include "editor/editor_node.h"
 #include "editor/file_system/editor_paths.h"
@@ -323,6 +324,9 @@ void EditorSettings::_get_property_list(List<PropertyInfo> *p_list) const {
 		pi.usage = pusage;
 		if (hints.has(E.name)) {
 			pi = hints[E.name];
+			// The hint's usage would store every hinted setting, defaults included. Store only
+			// what differs from the default, so a changed default reaches existing installs.
+			pi.usage = (pi.usage & ~PROPERTY_USAGE_STORAGE) | (pusage & PROPERTY_USAGE_STORAGE);
 		}
 
 		if (E.basic) {
@@ -1414,6 +1418,9 @@ void EditorSettings::create() {
 
 		singleton->set_path(get_newest_settings_path()); // Settings can be loaded from older version file, so make sure it's newest.
 		singleton->save_changed_setting = true;
+		if (FileAccess::exists(singleton->get_path())) {
+			singleton->disk_md5 = FileAccess::get_md5(singleton->get_path());
+		}
 
 		print_verbose("EditorSettings: Load OK!");
 
@@ -1512,12 +1519,142 @@ void EditorSettings::setup_network() {
 	set("network/language_server/remote_host", selected);
 }
 
+// Sub- and external resources (customised shortcuts) are not reloaded from disk; skip `"id")`.
+static Error _skip_resource_reference(void *p_data, VariantParser::Stream *p_stream, Ref<Resource> &r_res, int &line, String &r_err_str) {
+	VariantParser::Token token;
+	do {
+		Error err = VariantParser::get_token(p_stream, token, line, r_err_str);
+		if (err != OK) {
+			return err;
+		}
+	} while (token.type != VariantParser::TK_PARENTHESIS_CLOSE);
+	r_res.unref();
+	return OK;
+}
+
+// The plain settings stored in the file's [resource] section.
+static Error _read_stored_settings(const String &p_path, HashMap<String, Variant> &r_settings) {
+	Error err;
+	Ref<FileAccess> f = FileAccess::open(p_path, FileAccess::READ, &err);
+	if (f.is_null()) {
+		return err;
+	}
+	VariantParser::StreamFile stream;
+	stream.f = f;
+	VariantParser::ResourceParser skip;
+	skip.ext_func = _skip_resource_reference;
+	skip.sub_func = _skip_resource_reference;
+
+	String section;
+	int lines = 0;
+	while (true) {
+		String assign;
+		Variant value;
+		VariantParser::Tag tag;
+		String error_text;
+		err = VariantParser::parse_tag_assign_eof(&stream, lines, error_text, tag, assign, value, &skip);
+		if (err == ERR_FILE_EOF) {
+			return OK;
+		}
+		if (err != OK) {
+			ERR_PRINT(vformat("Editor settings parse error at %s:%d: %s.", p_path, lines, error_text));
+			return err;
+		}
+		if (!assign.is_empty()) {
+			if (section == "resource") {
+				r_settings[assign] = value;
+			}
+		} else if (!tag.name.is_empty()) {
+			section = tag.name;
+		}
+	}
+}
+
+// Takes what another window or an agent wrote to the settings file since this window last read
+// or wrote it. Settings changed in this window and not saved yet (changed_settings) keep their
+// value; every other setting takes the file's value, or its default when the file omits it.
+bool EditorSettings::_merge_from_disk(bool p_notify) {
+	_THREAD_SAFE_METHOD_
+
+	const String path = get_path();
+	if (path.is_empty() || !FileAccess::exists(path)) {
+		return false;
+	}
+	// Content, not modified time: the time has one-second resolution, which misses an edit
+	// made in the same second as a save. The file is a few kilobytes.
+	const String md5 = FileAccess::get_md5(path);
+	if (md5.is_empty() || md5 == disk_md5) {
+		return false;
+	}
+	disk_md5 = md5;
+
+	HashMap<String, Variant> stored;
+	if (_read_stored_settings(path, stored) != OK) {
+		return false;
+	}
+
+	Vector<String> applied;
+	for (KeyValue<String, VariantContainer> &E : props) {
+		if (changed_settings.has(E.key) || E.value.hide_from_editor) {
+			continue; // Unsaved here, or never stored.
+		}
+		const Variant *value = stored.getptr(E.key);
+		if (!value) {
+			if (!E.value.has_default_value || E.value.initial.get_type() == Variant::NIL) {
+				continue;
+			}
+			value = &E.value.initial;
+		}
+		if (*value != E.value.variant) {
+			E.value.variant = *value;
+			applied.push_back(E.key);
+		}
+	}
+	for (const KeyValue<String, Variant> &E : stored) {
+		if (props.has(E.key) || changed_settings.has(E.key) || E.key == "shortcuts" || E.key == "builtin_action_overrides" || ClassDB::has_property(SNAME("Resource"), E.key)) {
+			continue;
+		}
+		if (_set_only(E.key, E.value)) {
+			applied.push_back(E.key);
+		}
+	}
+
+	print_verbose(vformat("EditorSettings: %s changed on disk, %d setting(s) taken.", path, applied.size()));
+	if (applied.is_empty()) {
+		return false;
+	}
+	if (p_notify) {
+		// Listeners ask get_changed_settings() what changed; afterwards these are no longer
+		// unsaved local changes, because the file already holds them.
+		for (const String &name : applied) {
+			changed_settings.insert(name);
+		}
+		emit_signal(SNAME("settings_changed"));
+		notify_changes();
+		for (const String &name : applied) {
+			changed_settings.erase(name);
+		}
+	}
+	return true;
+}
+
+bool EditorSettings::reload_if_changed_on_disk() {
+	return _merge_from_disk(true);
+}
+
 void EditorSettings::save() {
+	_save(true);
+}
+
+void EditorSettings::_save(bool p_notify) {
 	//_THREAD_SAFE_METHOD_
 
 	if (!singleton.ptr()) {
 		return;
 	}
+
+	// Merge, never overwrite: take what others wrote since we last read the file, then write.
+	singleton->_merge_from_disk(p_notify);
 
 	Error err = ResourceSaver::save(singleton);
 
@@ -1525,6 +1662,7 @@ void EditorSettings::save() {
 		ERR_PRINT("Error saving editor settings to " + singleton->get_path());
 	} else {
 		singleton->changed_settings.clear();
+		singleton->disk_md5 = FileAccess::get_md5(singleton->get_path());
 		print_verbose("EditorSettings: Save OK!");
 	}
 }
@@ -1556,7 +1694,7 @@ void EditorSettings::destroy() {
 	if (!singleton.ptr()) {
 		return;
 	}
-	save();
+	_save(false); // Shutting down: nothing left to notify.
 	singleton = Ref<EditorSettings>();
 }
 
