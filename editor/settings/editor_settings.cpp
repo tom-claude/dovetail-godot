@@ -1109,7 +1109,7 @@ void EditorSettings::_load_defaults(Ref<ConfigFile> p_extra_config) {
 		game_embed_mode_hints = "Disabled:-1,Auto (based on screen size):0,Enabled:1";
 	}
 #endif
-	int default_game_embed_mode = OS::get_singleton()->has_feature("xr_editor") ? -1 : 0;
+	int default_game_embed_mode = OS::get_singleton()->has_feature("xr_editor") ? -1 : 1;
 	EDITOR_SETTING_BASIC(Variant::INT, PROPERTY_HINT_ENUM, "run/window_placement/game_embed_mode", default_game_embed_mode, game_embed_mode_hints);
 
 	// Auto save
