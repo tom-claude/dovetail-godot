@@ -1,9 +1,9 @@
-short_name = "godot"
-name = "Godot Engine"
+short_name = "dovetail"
+name = "Dovetail"
 major = 4
 minor = 7
 patch = 2
 status = "stable"
 module_config = ""
-website = "https://godotengine.org"
+website = "https://github.com/tom-claude/dovetail"
 docs = "4.7"

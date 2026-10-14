@@ -7,13 +7,11 @@
 	<key>CFBundleExecutable</key>
 	<string>Godot</string>
 	<key>CFBundleName</key>
-	<string>Godot</string>
+	<string>Dovetail</string>
 	<key>CFBundleIconFile</key>
-	<string>GodotLG.icns</string>
-	<key>CFBundleIconName</key>
-	<string>GodotLG</string>
+	<string>Dovetail.icns</string>
 	<key>CFBundleIdentifier</key>
-	<string>org.godotengine.godot</string>
+	<string>nz.co.bioscope.dovetail</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundlePackageType</key>
