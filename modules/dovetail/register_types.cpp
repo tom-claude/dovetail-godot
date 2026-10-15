@@ -12,6 +12,9 @@
 // line, {"id","tool","args","token"} in, {"id","ok","result"|"error"} out. Each instance writes
 // <config>/Dovetail/app_bridge/<pid>.json with its port and token and removes it on exit.
 // Deliberately small: info, screenshot of its own window, editor settings. Nothing else.
+//
+// It also keeps a log of everything the window prints, including the crash handler's backtrace
+// (see start_log), because the editor writes none by default.
 
 #include "register_types.h"
 
@@ -21,6 +24,7 @@
 #include "core/io/file_access.h"
 #include "core/io/image.h"
 #include "core/io/json.h"
+#include "core/io/logger.h"
 #include "core/io/stream_peer_tcp.h"
 #include "core/io/tcp_server.h"
 #include "core/object/callable_mp.h"
@@ -327,6 +331,26 @@ class DovetailAppBridge : public Object {
 		}
 	}
 
+	// Save what this window prints to <config>/Dovetail/logs/editor.log (project_manager.log for the
+	// project manager); the crash handler prints its backtrace through the same log, so a crash
+	// leaves a file to read. The last five runs are kept. Skipped when --log-file is given:
+	// Main already logs to that path.
+	void start_log(bool p_project_manager) {
+		for (const String &arg : OS::get_singleton()->get_cmdline_args()) {
+			if (arg == "--log-file") {
+				return;
+			}
+		}
+		const String dir = OS::get_singleton()->get_config_path().path_join(OS::get_singleton()->get_godot_dir_name()).path_join("logs");
+		DirAccess::make_dir_recursive_absolute(dir);
+		// The editor saves files by writing a temporary copy and renaming it on close. A log must be
+		// readable after a crash, under its own name, so it is opened without that.
+		const bool safe_save = FileAccess::is_backup_save_enabled();
+		FileAccess::set_backup_save(false);
+		OS::get_singleton()->add_logger(memnew(RotatedFileLogger(dir.path_join(p_project_manager ? "project_manager.log" : "editor.log"), 5)));
+		FileAccess::set_backup_save(safe_save);
+	}
+
 public:
 	void start() {
 		// Only in a real editor or project manager window; never in a game or a headless run.
@@ -337,6 +361,7 @@ public:
 		if (!DisplayServer::get_singleton() || DisplayServer::get_singleton()->get_name() == "headless") {
 			return;
 		}
+		start_log(engine->is_project_manager_hint());
 		SceneTree *tree = SceneTree::get_singleton();
 		if (!tree) {
 			ERR_PRINT("Dovetail app bridge: no SceneTree on the first frame; not started.");
